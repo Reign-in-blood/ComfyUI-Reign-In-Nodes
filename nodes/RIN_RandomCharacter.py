@@ -153,7 +153,7 @@ def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
                     min=0,
                     max=0xFFFFFFFFFFFFFFFF,
                     step=1,
-                    control_after_generate=True,
+                    control_after_generate=io.ControlAfterGenerate.increment,
                     tooltip="Generation index. Increment walks through the list and wraps at the end.",
                 ),
             ],
