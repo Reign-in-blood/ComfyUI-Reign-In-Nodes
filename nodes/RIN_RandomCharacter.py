@@ -174,6 +174,15 @@ def _join_prefix(prefix: str | None, character_text: str) -> str:
     return f"{prefix}{PREFIX_SEPARATOR}{character_text}"
 
 
+def _safe_seed(seed) -> int:
+    """Convert stale/invalid workflow seed values to a valid ComfyUI seed."""
+    try:
+        value = int(seed)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(value, 0xFFFFFFFFFFFFFFFF))
+
+
 class RIN_RandomCharacter(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -211,19 +220,6 @@ class RIN_RandomCharacter(io.ComfyNode):
                                     step=1,
                                     tooltip="Number of distinct character lines to select.",
                                 ),
-                                io.Int.Input(
-                                    "seed",
-                                    display_name="Seed",
-                                    default=0,
-                                    min=0,
-                                    max=0xFFFFFFFFFFFFFFFF,
-                                    step=1,
-                                    control_after_generate=True,
-                                    tooltip=(
-                                        "Random seed. Fixed reproduces the same selection; "
-                                        "randomize, increment and decrement use ComfyUI's native seed control."
-                                    ),
-                                ),
                             ],
                         ),
                         io.DynamicCombo.Option(
@@ -244,6 +240,22 @@ class RIN_RandomCharacter(io.ComfyNode):
                         ),
                     ],
                 ),
+                # Keep the seed as one stable, top-level native ComfyUI widget.
+                # DynamicCombo controls can be recreated when switching mode, which is
+                # what caused duplicate control_after_generate widgets and NaN state.
+                io.Int.Input(
+                    "seed",
+                    display_name="Seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    step=1,
+                    control_after_generate=True,
+                    tooltip=(
+                        "Random mode only. Fixed reproduces the same selection; "
+                        "randomize, increment and decrement use ComfyUI's native seed control."
+                    ),
+                ),
             ],
             outputs=[
                 io.String.Output(display_name="text"),
@@ -251,12 +263,14 @@ class RIN_RandomCharacter(io.ComfyNode):
             hidden=[
                 io.Hidden.unique_id,
             ],
+            is_output_node=True,
         )
 
     @classmethod
     def execute(
         cls,
         mode: dict,
+        seed: int,
         text: str | None = None,
         unique_id=None,
     ) -> io.NodeOutput:
@@ -276,8 +290,7 @@ class RIN_RandomCharacter(io.ComfyNode):
 
         if selected_mode == "Random":
             count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
-            seed = int(list_data.get("seed", 0))
-            rng = random.Random(seed)
+            rng = random.Random(_safe_seed(seed))
             selected = rng.sample(lines, count)
 
         elif selected_mode == "Sequential":
@@ -303,6 +316,7 @@ class RIN_RandomCharacter(io.ComfyNode):
     def fingerprint_inputs(
         cls,
         mode: dict,
+        seed: int,
         text: str | None = None,
         unique_id=None,
     ):
@@ -318,5 +332,5 @@ class RIN_RandomCharacter(io.ComfyNode):
             # Sequential is intentionally stateful and must execute on every queued generation.
             return (filename, digest, time.time_ns())
 
-        # Random/Manual can be cached normally; prompt inputs already include mode data.
+        # Random/Manual can be cached normally; prompt inputs already include mode/seed/text.
         return (filename, digest)
