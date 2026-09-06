@@ -22,10 +22,7 @@ from .nodes.RIN_ImageSizePicker import *
 from .nodes.RIN_SuperImageLoader import *
 from .nodes.RIN_AnySwitch2 import *
 from .nodes.RIN_RotateImage import *
-from .nodes.RIN_RandomPrompt import *
 from .nodes.RIN_TextAppend import *
-from .nodes.RIN_RandomPrompt_2 import *
-from .nodes.RIN_RandomPrompt_3 import *
 from .nodes.RIN_RandomEyes import *
 from .nodes.RIN_RandomHair import *
 from .nodes.RIN_RandomAnimalFeatures import *
@@ -90,10 +87,7 @@ NODE_CLASS_MAPPINGS = {
    "Flux positiv Prompt Guidance": RIN_FluxGuidancePrompt,
    "Any Switch 2": RIN_AnySwitch2,
    "Rotate Image": RIN_RotateImage,
-   "Random Prompt": RIN_RandomPrompt,
    "Text Append": RIN_TextAppend,
-   "Random Prompt 2": RIN_RandomPrompt2,
-   "Random Prompt 3": RIN_RandomPrompt3,
    "Random Eyes": RIN_RandomEyes,
    "Random Hair": RIN_RandomHair,
    "Random Animal Features": RIN_RandomAnimalFeatures,
@@ -101,7 +95,7 @@ NODE_CLASS_MAPPINGS = {
    "Random Clothes": RIN_RandomClothes,
    "Random Background": RIN_RandomBackground,
    "Random CFG": RIN_RandomCFG,
-   "Random Character": RIN_RandomCharacter,
+   "RIN_RandomCharacter": RIN_RandomCharacter,
    "Cond Area Selector": RIN_SetCondAreaSelector,
    "Float Splitter": RIN_FloatSplitter,
    "Area Generator": RIN_AreaGen,
@@ -155,10 +149,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
    "Flux positiv Prompt Guidance": "🦁 | Flux positiv Prompt Guidance",
    "Any Switch 2": "🦁 | Any Switch 2",
    "Rotate Image": "🦁 | Rotate Image",
-   "Random Prompt": "🦁 | Random Prompt",
    "Text Append": "🦁 | Text Append",
-   "Random Prompt 2": "🦁 | Random Prompt 2",
-   "Random Prompt 3": "🦁 | Random Prompt 3",
    "Random Eyes": "🦁 | Random Eyes",
    "Random Hair": "🦁 | Random Hair",
    "Random Animal Features": "🦁 | Random Animal Features",
@@ -166,7 +157,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
    "Random Clothes": "🦁 | Random Clothes",
    "Random Background": "🦁 | Random Background",
    "Random CFG": "🦁 | Random CFG",
-   "Random Character": "🦁 | Random Character",
+   "RIN_RandomCharacter": "🦁 | Random Character",
    "Cond Area Selector": "🦁 | Cond Area Selector",
    "Float Splitter": "🦁 | Float Splitter",
    "Area Generator": "🦁 | Area Generator",
