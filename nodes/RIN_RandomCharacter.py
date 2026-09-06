@@ -1,237 +1,330 @@
-#------------------------------------------------#
-# Imports                                       #
-#------------------------------------------------#
+from __future__ import annotations
+
+import hashlib
+import random
+from pathlib import Path
+
+from comfy_api.latest import io, ui
 
 from ..Architecture import icons
 
-import os, csv, random
-from typing import List
 
-#------------------------------------------------#
+LIST_ROOT_DIR_NAME = "lists"
+CHARACTER_DIR_NAME = "characters"
+MULTI_CHARACTER_SEPARATOR = "\n.\n"
+PREFIX_SEPARATOR = ". "
+NO_LIST_PLACEHOLDER = "<no character list found>"
+EMPTY_LIST_PLACEHOLDER = "<empty character list>"
 
-CSV_ROOT_DIR_NAME = "CSV"        # <addon_root>/CSV
-CHARACTER_DIR_NAME = "character" # <addon_root>/CSV/character
 
-def _addon_root() -> str:
-    here = os.path.abspath(os.path.dirname(__file__))
-    parent = os.path.dirname(here)
-    return parent
+def _addon_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
-def _character_csv_dir() -> str:
-    """
-    Returns the directory where character CSV files are stored:
-    <addon_root>/CSV/character
-    """
-    return os.path.join(_addon_root(), CSV_ROOT_DIR_NAME, CHARACTER_DIR_NAME)
 
-def _rand_seed(seed: int) -> int:
-    """
-    If seed is None or negative, generate a random seed from os.urandom.
-    Otherwise use the given seed.
-    """
-    if seed is None or seed < 0:
-        return int.from_bytes(os.urandom(8), "little")
-    return seed
+def _character_list_dir() -> Path:
+    return _addon_root() / LIST_ROOT_DIR_NAME / CHARACTER_DIR_NAME
 
-def _list_character_csv_files() -> List[str]:
-    """
-    Returns a list of CSV filenames available in the character CSV directory:
-    <addon_root>/CSV/character
 
-    Each file corresponds to a character category
-    (Nintendo, Pokemon, Zelda, Disney, etc.).
-    """
-    directory = _character_csv_dir()
+def _safe_list_path(filename: str) -> Path | None:
+    if not filename:
+        return None
 
-    try:
-        files = os.listdir(directory)
-    except FileNotFoundError:
+    root = _character_list_dir().resolve()
+    candidate = (root / filename).resolve()
+
+    if candidate.suffix.lower() != ".txt":
+        return None
+
+    if root != candidate.parent and root not in candidate.parents:
+        return None
+
+    return candidate
+
+
+def _list_character_files() -> list[str]:
+    directory = _character_list_dir()
+    if not directory.is_dir():
         return []
 
-    csv_files = []
-    for f in files:
-        if f.lower().endswith(".csv"):
-            csv_files.append(f)
-    csv_files.sort()
-    return csv_files
+    return sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() == ".txt"
+    )
 
-def _load_rows(csv_filename: str) -> List[List[str]]:
-    """
-    Loads all non-empty, non-comment rows from the given CSV file
-    located in <addon_root>/CSV/character.
 
-    A row is skipped if:
-      - it is empty
-      - first non-empty cell starts with '#'
-    """
-    path = os.path.join(_character_csv_dir(), csv_filename)
-    rows: List[List[str]] = []
+def _load_character_lines(filename: str) -> list[str]:
+    path = _safe_list_path(filename)
+    if path is None or not path.is_file():
+        return []
 
-    if not os.path.isfile(path):
-        return rows
-
-    with open(path, "r", newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            # Strip whitespace from each cell
-            cleaned = [c.strip() for c in row]
-            # Skip completely empty rows
-            if not any(cleaned):
+    lines: list[str] = []
+    with path.open("r", encoding="utf-8-sig") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
                 continue
-            # Skip commented rows (first non-empty cell starts with '#')
-            first_non_empty = next((c for c in cleaned if c != ""), None)
-            if first_non_empty is not None and first_non_empty.startswith("#"):
-                continue
-            rows.append(cleaned)
+            lines.append(line)
 
-    return rows
+    return lines
 
-#------------------------------------------------#
 
-class RIN_RandomCharacter:
-    """
-    Node that returns a random known character prompt based on CSV files
-    stored in <addon_root>/CSV/character.
+def _character_name(line: str) -> str:
+    name = line.split(",", 1)[0].strip()
+    return name or line
 
-    Each CSV file corresponds to a character category (Nintendo, Pokemon,
-    Zelda, Disney, etc.) and must follow this column order (indexes 0..4):
 
-      0: character name
-      1: hair details
-      2: body details
-      3: clothing details
-      4: background details
+def _character_entries(filename: str) -> list[tuple[str, str]]:
+    lines = _load_character_lines(filename)
+    counts: dict[str, int] = {}
+    entries: list[tuple[str, str]] = []
 
-    All text should be written in English inside the CSV.
-    """
+    for line in lines:
+        name = _character_name(line)
+        counts[name] = counts.get(name, 0) + 1
+        occurrence = counts[name]
+        label = name if occurrence == 1 else f"{name} [{occurrence}]"
+        entries.append((label, line))
+
+    return entries
+
+
+def _character_labels(filename: str) -> list[str]:
+    labels = [label for label, _line in _character_entries(filename)]
+    return labels or [EMPTY_LIST_PLACEHOLDER]
+
+
+def _make_random_list_options() -> list[io.DynamicCombo.Option]:
+    files = _list_character_files()
+    if not files:
+        files = [NO_LIST_PLACEHOLDER]
+
+    return [
+        io.DynamicCombo.Option(
+            filename,
+            [
+                io.Int.Input(
+                    "characters",
+                    display_name="Characters",
+                    default=1,
+                    min=1,
+                    max=32,
+                    step=1,
+                    tooltip="Number of distinct character lines to select.",
+                ),
+                io.Int.Input(
+                    "seed",
+                    display_name="Seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    step=1,
+                    control_after_generate=True,
+                    tooltip="Random seed. The same list, count and seed reproduce the same selection.",
+                ),
+            ],
+        )
+        for filename in files
+    ]
+
+
+def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
+    files = _list_character_files()
+    if not files:
+        files = [NO_LIST_PLACEHOLDER]
+
+    return [
+        io.DynamicCombo.Option(
+            filename,
+            [
+                io.Int.Input(
+                    "characters",
+                    display_name="Characters",
+                    default=1,
+                    min=1,
+                    max=32,
+                    step=1,
+                    tooltip="Number of consecutive character lines to select.",
+                ),
+                io.Int.Input(
+                    "sequence_index",
+                    display_name="Sequence",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    step=1,
+                    control_after_generate=True,
+                    tooltip="Generation index. Increment walks through the list and wraps at the end.",
+                ),
+            ],
+        )
+        for filename in files
+    ]
+
+
+def _make_manual_list_options() -> list[io.DynamicCombo.Option]:
+    files = _list_character_files()
+    if not files:
+        files = [NO_LIST_PLACEHOLDER]
+
+    options: list[io.DynamicCombo.Option] = []
+    for filename in files:
+        labels = _character_labels(filename) if filename != NO_LIST_PLACEHOLDER else [EMPTY_LIST_PLACEHOLDER]
+        options.append(
+            io.DynamicCombo.Option(
+                filename,
+                [
+                    io.Combo.Input(
+                        "character",
+                        options=labels,
+                        default=labels[0],
+                        display_name="Character",
+                        tooltip="Select a character by the text before the first comma in the list line.",
+                    )
+                ],
+            )
+        )
+
+    return options
+
+
+def _selected_list_data(mode_data: dict) -> tuple[str, dict]:
+    list_data = mode_data.get("character_list", {})
+    if not isinstance(list_data, dict):
+        return "", {}
+
+    filename = str(list_data.get("character_list", ""))
+    return filename, list_data
+
+
+def _join_characters(lines: list[str]) -> str:
+    return MULTI_CHARACTER_SEPARATOR.join(lines)
+
+
+def _join_prefix(prefix: str | None, character_text: str) -> str:
+    prefix = (prefix or "").strip()
+
+    if not prefix:
+        return character_text
+    if not character_text:
+        return prefix
+
+    if prefix.endswith("."):
+        return f"{prefix} {character_text}"
+
+    return f"{prefix}{PREFIX_SEPARATOR}{character_text}"
+
+
+class RIN_RandomCharacter(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="RIN_RandomCharacter",
+            display_name="🦁 | Random Character",
+            category=icons.get("MyNodes/Prompt"),
+            description=(
+                "Build a character prompt from text lists. "
+                "Supports deterministic random selection, sequential selection and manual selection."
+            ),
+            inputs=[
+                io.String.Input(
+                    "text",
+                    display_name="Text",
+                    default="",
+                    optional=True,
+                    force_input=True,
+                    tooltip="Optional text to prepend to the selected character prompt.",
+                ),
+                io.DynamicCombo.Input(
+                    "mode",
+                    display_name="Mode",
+                    options=[
+                        io.DynamicCombo.Option(
+                            "Random",
+                            [
+                                io.DynamicCombo.Input(
+                                    "character_list",
+                                    display_name="Character List",
+                                    options=_make_random_list_options(),
+                                )
+                            ],
+                        ),
+                        io.DynamicCombo.Option(
+                            "Sequential",
+                            [
+                                io.DynamicCombo.Input(
+                                    "character_list",
+                                    display_name="Character List",
+                                    options=_make_sequential_list_options(),
+                                )
+                            ],
+                        ),
+                        io.DynamicCombo.Option(
+                            "Manual",
+                            [
+                                io.DynamicCombo.Input(
+                                    "character_list",
+                                    display_name="Character List",
+                                    options=_make_manual_list_options(),
+                                )
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+            outputs=[
+                io.String.Output(display_name="text"),
+            ],
+        )
 
     @classmethod
-    def INPUT_TYPES(cls):
-        csv_files = _list_character_csv_files()
-        if not csv_files:
-            # Fallback placeholder if no CSV is found
-            csv_files = ["<no character CSV found>"]
+    def execute(cls, mode: dict, text: str | None = None) -> io.NodeOutput:
+        selected_mode = str(mode.get("mode", "Random"))
+        filename, list_data = _selected_list_data(mode)
 
-        return {
-            "required": {
-                "category_csv": (
-                    csv_files,
-                    {
-                        "default": csv_files[0],
-                        "tooltip": "Choose the CSV file (category) for random characters, from CSV/character."
-                    }
-                ),
-                "use_name": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "label": "Use character name"
-                    }
-                ),
-                "use_hair": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "label": "Use hair details"
-                    }
-                ),
-                "use_body": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "label": "Use body details"
-                    }
-                ),
-                "use_clothing": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "label": "Use clothing details"
-                    }
-                ),
-                "use_background": (
-                    "BOOLEAN",
-                    {
-                        "default": True,
-                        "label": "Use background details"
-                    }
-                ),
-                # Seed tout en bas du node
-                "seed": (
-                    "INT",
-                    {
-                        "default": 0,
-                        "min": -1,
-                        "max": 2**31 - 1,
-                        "step": 1,
-                        "tooltip": "Random seed. Use -1 for a fully random seed."
-                    }
-                ),
-            }
-        }
+        if filename in ("", NO_LIST_PLACEHOLDER):
+            result = _join_prefix(text, "")
+            return io.NodeOutput(result, ui=ui.PreviewText(result))
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("character_prompt",)
-    FUNCTION = "run"
-    CATEGORY = "RIN/Prompt"
+        lines = _load_character_lines(filename)
+        if not lines:
+            result = _join_prefix(text, "")
+            return io.NodeOutput(result, ui=ui.PreviewText(result))
 
-    ICON = icons.RIN_DICE if hasattr(icons, "RIN_DICE") else "⚄"
+        selected: list[str]
 
-    def run(
-        self,
-        category_csv: str,
-        use_name: bool,
-        use_hair: bool,
-        use_body: bool,
-        use_clothing: bool,
-        use_background: bool,
-        seed: int,
-    ):
-        # Handle the placeholder case
-        if category_csv == "<no character CSV found>":
-            return ("",)
+        if selected_mode == "Random":
+            count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
+            seed = int(list_data.get("seed", 0))
+            rng = random.Random(seed)
+            selected = rng.sample(lines, count)
 
-        # Prepare RNG
-        rnd = random.Random(_rand_seed(seed))
+        elif selected_mode == "Sequential":
+            count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
+            sequence_index = max(0, int(list_data.get("sequence_index", 0)))
+            start = (sequence_index * count) % len(lines)
+            selected = [lines[(start + offset) % len(lines)] for offset in range(count)]
 
-        # Load rows from selected CSV inside CSV/character
-        rows = _load_rows(category_csv)
-        if not rows:
-            # If file is missing or empty, just return an empty string
-            return ("",)
+        elif selected_mode == "Manual":
+            requested = str(list_data.get("character", ""))
+            entry_map = dict(_character_entries(filename))
+            line = entry_map.get(requested)
+            selected = [line] if line else []
 
-        # Pick one random row
-        row = rnd.choice(rows)
+        else:
+            selected = []
 
-        # Make sure we have at least 5 columns (fill missing with empty strings)
-        while len(row) < 5:
-            row.append("")
+        character_text = _join_characters(selected)
+        result = _join_prefix(text, character_text)
+        return io.NodeOutput(result, ui=ui.PreviewText(result))
 
-        character_name   = row[0].strip()
-        hair_details     = row[1].strip()
-        body_details     = row[2].strip()
-        clothing_details = row[3].strip()
-        background       = row[4].strip()
+    @classmethod
+    def fingerprint_inputs(cls, mode: dict, text: str | None = None):
+        filename, _list_data = _selected_list_data(mode)
+        path = _safe_list_path(filename)
 
-        parts: List[str] = []
+        if path is None or not path.is_file():
+            return (filename, None)
 
-        if use_name and character_name:
-            parts.append(character_name)
-
-        if use_hair and hair_details:
-            parts.append(hair_details)
-
-        if use_body and body_details:
-            parts.append(body_details)
-
-        if use_clothing and clothing_details:
-            parts.append(clothing_details)
-
-        if use_background and background:
-            parts.append(background)
-
-        separator = ", "
-
-        prompt = separator.join(parts)
-
-        return (prompt,)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return (filename, digest)
