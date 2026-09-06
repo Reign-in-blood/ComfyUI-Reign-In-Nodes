@@ -58,6 +58,10 @@ def _list_character_files() -> list[str]:
     )
 
 
+def _character_files_or_placeholder() -> list[str]:
+    return _list_character_files() or [NO_LIST_PLACEHOLDER]
+
+
 def _load_character_lines(filename: str) -> list[str]:
     path = _safe_list_path(filename)
     if path is None or not path.is_file():
@@ -99,56 +103,27 @@ def _character_labels(filename: str) -> list[str]:
     return labels or [EMPTY_LIST_PLACEHOLDER]
 
 
-def _make_random_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
-
-    return [
-        io.DynamicCombo.Option(
-            filename,
-            [
-                io.Int.Input(
-                    "characters",
-                    display_name="Characters",
-                    default=1,
-                    min=1,
-                    max=32,
-                    step=1,
-                    tooltip="Number of distinct character lines to select.",
-                ),
-            ],
-        )
-        for filename in files
-    ]
-
-
-def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
-
-    return [
-        io.DynamicCombo.Option(
-            filename,
-            [
-                io.Int.Input(
-                    "characters",
-                    display_name="Characters",
-                    default=1,
-                    min=1,
-                    max=32,
-                    step=1,
-                    tooltip="Number of consecutive character lines to select before advancing.",
-                ),
-            ],
-        )
-        for filename in files
-    ]
+def _character_list_input() -> io.Combo.Input:
+    files = _character_files_or_placeholder()
+    return io.Combo.Input(
+        "character_list",
+        display_name="Character List",
+        options=files,
+        default=files[0],
+        tooltip="Choose the character list.",
+    )
 
 
 def _make_manual_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
+    files = _character_files_or_placeholder()
 
     options: list[io.DynamicCombo.Option] = []
     for filename in files:
-        labels = _character_labels(filename) if filename != NO_LIST_PLACEHOLDER else [EMPTY_LIST_PLACEHOLDER]
+        labels = (
+            _character_labels(filename)
+            if filename != NO_LIST_PLACEHOLDER
+            else [EMPTY_LIST_PLACEHOLDER]
+        )
         options.append(
             io.DynamicCombo.Option(
                 filename,
@@ -168,12 +143,17 @@ def _make_manual_list_options() -> list[io.DynamicCombo.Option]:
 
 
 def _selected_list_data(mode_data: dict) -> tuple[str, dict]:
-    list_data = mode_data.get("character_list", {})
-    if not isinstance(list_data, dict):
-        return "", {}
+    list_value = mode_data.get("character_list", "")
 
-    filename = str(list_data.get("character_list", ""))
-    return filename, list_data
+    # Manual mode uses a DynamicCombo so the selected character list
+    # and the selected character arrive in a nested dictionary.
+    if isinstance(list_value, dict):
+        filename = str(list_value.get("character_list", ""))
+        return filename, list_value
+
+    # Random and Sequential use a regular Combo. Their mode-specific
+    # values live directly in the mode dictionary.
+    return str(list_value or ""), mode_data
 
 
 def _join_characters(lines: list[str]) -> str:
@@ -221,21 +201,35 @@ class RIN_RandomCharacter(io.ComfyNode):
                         io.DynamicCombo.Option(
                             "Random",
                             [
-                                io.DynamicCombo.Input(
-                                    "character_list",
-                                    display_name="Character List",
-                                    options=_make_random_list_options(),
-                                )
+                                _character_list_input(),
+                                io.Int.Input(
+                                    "characters",
+                                    display_name="Characters",
+                                    default=1,
+                                    min=1,
+                                    max=32,
+                                    step=1,
+                                    tooltip="Number of distinct character lines to select.",
+                                ),
+                                io.Int.Input(
+                                    "seed",
+                                    display_name="Seed",
+                                    default=0,
+                                    min=0,
+                                    max=0xFFFFFFFFFFFFFFFF,
+                                    step=1,
+                                    control_after_generate=True,
+                                    tooltip=(
+                                        "Random seed. Fixed reproduces the same selection; "
+                                        "randomize, increment and decrement use ComfyUI's native seed control."
+                                    ),
+                                ),
                             ],
                         ),
                         io.DynamicCombo.Option(
                             "Sequential",
                             [
-                                io.DynamicCombo.Input(
-                                    "character_list",
-                                    display_name="Character List",
-                                    options=_make_sequential_list_options(),
-                                )
+                                _character_list_input(),
                             ],
                         ),
                         io.DynamicCombo.Option(
@@ -250,18 +244,6 @@ class RIN_RandomCharacter(io.ComfyNode):
                         ),
                     ],
                 ),
-                # Keep the native ComfyUI seed widget outside DynamicCombo.
-                # Dynamic creation of control_after_generate widgets currently produces UI ghosts.
-                io.Int.Input(
-                    "seed",
-                    display_name="Seed",
-                    default=0,
-                    min=0,
-                    max=0xFFFFFFFFFFFFFFFF,
-                    step=1,
-                    control_after_generate=True,
-                    tooltip="Random mode only. Same list, character count and seed reproduce the same selection.",
-                ),
             ],
             outputs=[
                 io.String.Output(display_name="text"),
@@ -275,7 +257,6 @@ class RIN_RandomCharacter(io.ComfyNode):
     def execute(
         cls,
         mode: dict,
-        seed: int,
         text: str | None = None,
         unique_id=None,
     ) -> io.NodeOutput:
@@ -295,15 +276,15 @@ class RIN_RandomCharacter(io.ComfyNode):
 
         if selected_mode == "Random":
             count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
-            rng = random.Random(int(seed))
+            seed = int(list_data.get("seed", 0))
+            rng = random.Random(seed)
             selected = rng.sample(lines, count)
 
         elif selected_mode == "Sequential":
-            count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
             key = (str(unique_id), filename)
             start = _SEQUENCE_POSITIONS.get(key, 0) % len(lines)
-            selected = [lines[(start + offset) % len(lines)] for offset in range(count)]
-            _SEQUENCE_POSITIONS[key] = (start + count) % len(lines)
+            selected = [lines[start]]
+            _SEQUENCE_POSITIONS[key] = (start + 1) % len(lines)
 
         elif selected_mode == "Manual":
             requested = str(list_data.get("character", ""))
@@ -322,7 +303,6 @@ class RIN_RandomCharacter(io.ComfyNode):
     def fingerprint_inputs(
         cls,
         mode: dict,
-        seed: int,
         text: str | None = None,
         unique_id=None,
     ):
@@ -338,5 +318,5 @@ class RIN_RandomCharacter(io.ComfyNode):
             # Sequential is intentionally stateful and must execute on every queued generation.
             return (filename, digest, time.time_ns())
 
-        # Random/Manual can be cached normally; prompt inputs already include seed/mode/text.
+        # Random/Manual can be cached normally; prompt inputs already include mode data.
         return (filename, digest)
