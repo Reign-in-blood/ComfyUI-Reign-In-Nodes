@@ -27,30 +27,30 @@ function getSeedWidget(node) {
     return node.widgets?.find((widget) => widget?.name === "seed") ?? null;
 }
 
-function getSeedControl(node, seedWidget) {
-    const linked = (seedWidget?.linkedWidgets ?? []).find(
-        (widget) =>
-            widget?.name === "control_after_generate" &&
-            (typeof widget.beforeQueued === "function" ||
-                typeof widget.afterQueued === "function")
-    );
-    if (linked) return linked;
+function getSeedControls(node, seedWidget) {
+    const controls = new Set();
 
-    const native = (node.widgets ?? []).find(
-        (widget) =>
-            widget?.name === "control_after_generate" &&
-            (typeof widget.beforeQueued === "function" ||
-                typeof widget.afterQueued === "function")
-    );
-    if (native) return native;
+    for (const widget of seedWidget?.linkedWidgets ?? []) {
+        if (widget?.name === "control_after_generate") controls.add(widget);
+    }
+
+    for (const widget of node.widgets ?? []) {
+        if (widget?.name === "control_after_generate") controls.add(widget);
+    }
+
+    return [...controls];
+}
+
+function getSeedControl(node, seedWidget) {
+    const controls = getSeedControls(node, seedWidget);
 
     return (
-        (seedWidget?.linkedWidgets ?? []).find(
-            (widget) => widget?.name === "control_after_generate"
+        controls.find(
+            (widget) =>
+                typeof widget.beforeQueued === "function" ||
+                typeof widget.afterQueued === "function"
         ) ??
-        (node.widgets ?? []).find(
-            (widget) => widget?.name === "control_after_generate"
-        ) ??
+        controls[0] ??
         null
     );
 }
@@ -208,11 +208,17 @@ function refreshVisibility(node) {
     if (!seedWidget) return;
 
     repairNativeSeedControl(node);
-    const control = getSeedControl(node, seedWidget);
-    const hidden = !isRandomMode(node);
 
+    const hidden = !isRandomMode(node);
     setHidden(seedWidget, hidden);
-    setHidden(control, hidden);
+
+    // Hide every control-after-generate widget associated with this node.
+    // Restored workflows can contain more than one visible instance even when
+    // only one is currently linked to the seed.
+    for (const control of getSeedControls(node, seedWidget)) {
+        setHidden(control, hidden);
+    }
+
     refitNode(node);
 }
 
