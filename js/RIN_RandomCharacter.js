@@ -27,15 +27,34 @@ function getSeedWidget(node) {
     return node.widgets?.find((widget) => widget?.name === "seed") ?? null;
 }
 
+function isNativeValueControl(widget) {
+    return (
+        widget &&
+        typeof widget.beforeQueued === "function" &&
+        typeof widget.afterQueued === "function"
+    );
+}
+
 function getSeedControls(node, seedWidget) {
     const controls = new Set();
 
+    // ComfyUI V3 may give the control widget an internal name different from
+    // "control_after_generate". The reliable relation is seed.linkedWidgets.
     for (const widget of seedWidget?.linkedWidgets ?? []) {
-        if (widget?.name === "control_after_generate") controls.add(widget);
+        if (widget) controls.add(widget);
     }
 
+    // Fallback for restored workflows where the seed -> control relation was
+    // lost. Native value controls are the widgets owning both queue callbacks.
     for (const widget of node.widgets ?? []) {
-        if (widget?.name === "control_after_generate") controls.add(widget);
+        if (
+            isNativeValueControl(widget) ||
+            widget?.name === "control_after_generate" ||
+            widget?.label === "control_after_generate" ||
+            widget?.label === "control after generate"
+        ) {
+            controls.add(widget);
+        }
     }
 
     return [...controls];
@@ -45,11 +64,7 @@ function getSeedControl(node, seedWidget) {
     const controls = getSeedControls(node, seedWidget);
 
     return (
-        controls.find(
-            (widget) =>
-                typeof widget.beforeQueued === "function" ||
-                typeof widget.afterQueued === "function"
-        ) ??
+        controls.find((widget) => isNativeValueControl(widget)) ??
         controls[0] ??
         null
     );
@@ -117,8 +132,7 @@ function repairNativeSeedControl(node) {
         const changedAfterQueue = numericSeed(seedWidget) !== before;
 
         // Native ComfyUI remains authoritative. The fallback runs only when
-        // its callback did not change the seed at all (the failure observed on
-        // restored/custom V3 nodes).
+        // its callback did not change the seed at all.
         if (
             isRandomMode(node) &&
             control.value !== "fixed" &&
@@ -212,9 +226,6 @@ function refreshVisibility(node) {
     const hidden = !isRandomMode(node);
     setHidden(seedWidget, hidden);
 
-    // Hide every control-after-generate widget associated with this node.
-    // Restored workflows can contain more than one visible instance even when
-    // only one is currently linked to the seed.
     for (const control of getSeedControls(node, seedWidget)) {
         setHidden(control, hidden);
     }
