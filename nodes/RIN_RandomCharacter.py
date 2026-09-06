@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def _safe_seed(seed) -> int:
         value = int(seed)
     except (TypeError, ValueError, OverflowError):
         return 0
-    return max(0, min(value, 0xFFFFFFFFFFFFFFFF))
+    return max(0, min(value, sys.maxsize))
 
 
 class RIN_RandomCharacter(io.ComfyNode):
@@ -240,17 +241,16 @@ class RIN_RandomCharacter(io.ComfyNode):
                         ),
                     ],
                 ),
-                # Keep the seed as one stable, top-level native ComfyUI widget.
-                # DynamicCombo controls can be recreated when switching mode, which is
-                # what caused duplicate control_after_generate widgets and NaN state.
+                # This matches ComfyUI's current built-in Seed node: a stable,
+                # top-level integer seed with a native control-after-generate widget.
                 io.Int.Input(
                     "seed",
                     display_name="Seed",
                     default=0,
                     min=0,
-                    max=0xFFFFFFFFFFFFFFFF,
+                    max=sys.maxsize,
                     step=1,
-                    control_after_generate=True,
+                    control_after_generate=io.ControlAfterGenerate.fixed,
                     tooltip=(
                         "Random mode only. Fixed reproduces the same selection; "
                         "randomize, increment and decrement use ComfyUI's native seed control."
@@ -330,7 +330,9 @@ class RIN_RandomCharacter(io.ComfyNode):
 
         if selected_mode == "Sequential":
             # Sequential is intentionally stateful and must execute on every queued generation.
-            return (filename, digest, time.time_ns())
+            return (selected_mode, filename, digest, time.time_ns())
 
-        # Random/Manual can be cached normally; prompt inputs already include mode/seed/text.
-        return (filename, digest)
+        if selected_mode == "Random":
+            return (selected_mode, filename, digest, _safe_seed(seed))
+
+        return (selected_mode, filename, digest)
