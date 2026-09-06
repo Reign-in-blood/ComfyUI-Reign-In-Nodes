@@ -1,0 +1,14 @@
+[project]
+name = "reign-in-nodes"
+version = "1.0.0"
+description = "A collection of custom utility, image, prompt, loader and workflow nodes for ComfyUI."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Reign-in-blood/ComfyUI-Reign-In-Nodes"
+"Bug Tracker" = "https://github.com/Reign-in-blood/ComfyUI-Reign-In-Nodes/issues"
+
+[tool.comfy]
+PublisherId = "" # TODO: fill with the Publisher ID created on the Comfy Registry.
+DisplayName = "Reign-In-Nodes"
