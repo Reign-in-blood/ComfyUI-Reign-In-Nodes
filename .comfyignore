@@ -1,6 +1,0 @@
-# Development-only files excluded from Comfy Registry packages
-__pycache__/
-*.py[cod]
-.vscode/
-.idea/
-tests/
