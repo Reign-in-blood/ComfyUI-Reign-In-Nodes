@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import time
 from pathlib import Path
 
 from comfy_api.latest import io, ui
@@ -15,6 +16,10 @@ MULTI_CHARACTER_SEPARATOR = "\n.\n"
 PREFIX_SEPARATOR = ". "
 NO_LIST_PLACEHOLDER = "<no character list found>"
 EMPTY_LIST_PLACEHOLDER = "<empty character list>"
+
+# Sequential mode deliberately has no visible counter/seed.
+# Position is kept per node instance and per selected list for the current ComfyUI session.
+_SEQUENCE_POSITIONS: dict[tuple[str, str], int] = {}
 
 
 def _addon_root() -> Path:
@@ -95,9 +100,7 @@ def _character_labels(filename: str) -> list[str]:
 
 
 def _make_random_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files()
-    if not files:
-        files = [NO_LIST_PLACEHOLDER]
+    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
 
     return [
         io.DynamicCombo.Option(
@@ -112,16 +115,6 @@ def _make_random_list_options() -> list[io.DynamicCombo.Option]:
                     step=1,
                     tooltip="Number of distinct character lines to select.",
                 ),
-                io.Int.Input(
-                    "seed",
-                    display_name="Seed",
-                    default=0,
-                    min=0,
-                    max=0xFFFFFFFFFFFFFFFF,
-                    step=1,
-                    control_after_generate=True,
-                    tooltip="Random seed. The same list, count and seed reproduce the same selection.",
-                ),
             ],
         )
         for filename in files
@@ -129,9 +122,7 @@ def _make_random_list_options() -> list[io.DynamicCombo.Option]:
 
 
 def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files()
-    if not files:
-        files = [NO_LIST_PLACEHOLDER]
+    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
 
     return [
         io.DynamicCombo.Option(
@@ -144,17 +135,7 @@ def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
                     min=1,
                     max=32,
                     step=1,
-                    tooltip="Number of consecutive character lines to select.",
-                ),
-                io.Int.Input(
-                    "sequence_index",
-                    display_name="Sequence",
-                    default=0,
-                    min=0,
-                    max=0xFFFFFFFFFFFFFFFF,
-                    step=1,
-                    control_after_generate=io.ControlAfterGenerate.increment,
-                    tooltip="Generation index. Increment walks through the list and wraps at the end.",
+                    tooltip="Number of consecutive character lines to select before advancing.",
                 ),
             ],
         )
@@ -163,9 +144,7 @@ def _make_sequential_list_options() -> list[io.DynamicCombo.Option]:
 
 
 def _make_manual_list_options() -> list[io.DynamicCombo.Option]:
-    files = _list_character_files()
-    if not files:
-        files = [NO_LIST_PLACEHOLDER]
+    files = _list_character_files() or [NO_LIST_PLACEHOLDER]
 
     options: list[io.DynamicCombo.Option] = []
     for filename in files:
@@ -224,7 +203,7 @@ class RIN_RandomCharacter(io.ComfyNode):
             category=icons.get("MyNodes/Prompt"),
             description=(
                 "Build a character prompt from text lists. "
-                "Supports deterministic random selection, sequential selection and manual selection."
+                "Supports deterministic random selection, automatic sequential selection and manual selection."
             ),
             inputs=[
                 io.String.Input(
@@ -271,14 +250,35 @@ class RIN_RandomCharacter(io.ComfyNode):
                         ),
                     ],
                 ),
+                # Keep the native ComfyUI seed widget outside DynamicCombo.
+                # Dynamic creation of control_after_generate widgets currently produces UI ghosts.
+                io.Int.Input(
+                    "seed",
+                    display_name="Seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    step=1,
+                    control_after_generate=True,
+                    tooltip="Random mode only. Same list, character count and seed reproduce the same selection.",
+                ),
             ],
             outputs=[
                 io.String.Output(display_name="text"),
             ],
+            hidden=[
+                io.Hidden.unique_id,
+            ],
         )
 
     @classmethod
-    def execute(cls, mode: dict, text: str | None = None) -> io.NodeOutput:
+    def execute(
+        cls,
+        mode: dict,
+        seed: int,
+        text: str | None = None,
+        unique_id=None,
+    ) -> io.NodeOutput:
         selected_mode = str(mode.get("mode", "Random"))
         filename, list_data = _selected_list_data(mode)
 
@@ -295,15 +295,15 @@ class RIN_RandomCharacter(io.ComfyNode):
 
         if selected_mode == "Random":
             count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
-            seed = int(list_data.get("seed", 0))
-            rng = random.Random(seed)
+            rng = random.Random(int(seed))
             selected = rng.sample(lines, count)
 
         elif selected_mode == "Sequential":
             count = max(1, min(int(list_data.get("characters", 1)), len(lines)))
-            sequence_index = max(0, int(list_data.get("sequence_index", 0)))
-            start = (sequence_index * count) % len(lines)
+            key = (str(unique_id), filename)
+            start = _SEQUENCE_POSITIONS.get(key, 0) % len(lines)
             selected = [lines[(start + offset) % len(lines)] for offset in range(count)]
+            _SEQUENCE_POSITIONS[key] = (start + count) % len(lines)
 
         elif selected_mode == "Manual":
             requested = str(list_data.get("character", ""))
@@ -319,12 +319,24 @@ class RIN_RandomCharacter(io.ComfyNode):
         return io.NodeOutput(result, ui=ui.PreviewText(result))
 
     @classmethod
-    def fingerprint_inputs(cls, mode: dict, text: str | None = None):
+    def fingerprint_inputs(
+        cls,
+        mode: dict,
+        seed: int,
+        text: str | None = None,
+        unique_id=None,
+    ):
+        selected_mode = str(mode.get("mode", "Random"))
         filename, _list_data = _selected_list_data(mode)
         path = _safe_list_path(filename)
 
-        if path is None or not path.is_file():
-            return (filename, None)
+        digest = None
+        if path is not None and path.is_file():
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if selected_mode == "Sequential":
+            # Sequential is intentionally stateful and must execute on every queued generation.
+            return (filename, digest, time.time_ns())
+
+        # Random/Manual can be cached normally; prompt inputs already include seed/mode/text.
         return (filename, digest)
